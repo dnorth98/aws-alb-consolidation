@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Create load balancer(s) used for microservices
+Parameters:
+    ALBNUMBER:
+      Description: The number of this load balancer in this region for this Environment
+      Type: String
+      AllowedValues:
+        - 1
+        - 2
+        - 3
+        - 4
+      Default: "1"
+    SIGNIANTSERVICE:
+        Description: Name for this service
+        Type: String
+        Default: "microservice_alb"
+    SIGNIANTENV:
+        Description: Deployment Environment
+        Type: String
+        AllowedValues:
+          - env1
+          - env2
+          - env3
+        Default: "env1"
+    SIGNIANTOWNER:
+        Description: Owner of this service
+        Type: String
+        Default: "TeamFoo"
+    SIGNIANTPRODUCT:
+        Description: Product name
+        Type: String
+        AllowedValues:
+          - all
+          - product1
+          - product2
+          - product3
+        Default: "all"
+    LOADBALANCERSUBNETS:
+        Description: Subnets to create the ALB in (must match those used by the ECS cluster)
+        Type: "List<AWS::EC2::Subnet::Id>"
+    LOADBALANCERSECURITYGROUP:
+        Description: The security group to attach to the ALB (created by the ECS cluster stack)
+        Type: "AWS::EC2::SecurityGroup::Id"
+    LBSSLCERT1:
+        Description: "Primary SSL Certificate ARN (mandatory)"
+        Type: String
+    LBSSLCERT2:
+        Description: "Secondary SSL Certificate ARN (optional)"
+        Type: String
+    LBSSLCERT3:
+        Description: "Tertiary SSL Certificate ARN (optional)"
+        Type: String
+    LBSSLCERT4:
+        Description: "Quaternary SSL Certificate ARN (optional)"
+        Type: String
+    LBSSLCERT5:
+        Description: "Quinary SSL Certificate ARN (optional)"
+        Type: String
+    VPCID:
+        Description: "VPC in which the load balancer will be created"
+        Type: AWS::EC2::VPC::Id
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Network Configuration"
+        Parameters:
+          - VPCID
+          - LOADBALANCERSUBNETS
+          - LOADBALANCERSECURITYGROUP
+      -
+        Label:
+          default: "Naming and Tagging"
+        Parameters:
+          - ALBNUMBER
+          - SIGNIANTENV
+          - SIGNIANTSERVICE
+          - SIGNIANTOWNER
+          - SIGNIANTPRODUCT
+      -
+        Label:
+          default: "SSL Certificates"
+        Parameters:
+          - LBSSLCERT1
+          - LBSSLCERT2
+          - LBSSLCERT3
+          - LBSSLCERT4
+          - LBSSLCERT5
+    ParameterLabels:
+      LBSSLCERT1:
+        default: "Primary SSL cert for the ALB"
+      LBSSLCERT2:
+        default: "Additional SSL cert for the ALB (optional)"
+      LBSSLCERT3:
+        default: "Additional SSL cert for the ALB (optional)"
+      LBSSLCERT4:
+        default: "Additional SSL cert for the ALB (optional)"
+      LBSSLCERT5:
+        default: "Additional SSL cert for the ALB (optional)"
+
+Conditions:
+    AddLBSSLCert2: !Not [ !Equals [ !Ref LBSSLCERT2, "" ] ]
+    AddLBSSLCert3: !Not [ !Equals [ !Ref LBSSLCERT3, "" ] ]
+    AddLBSSLCert4: !Not [ !Equals [ !Ref LBSSLCERT4, "" ] ]
+    AddLBSSLCert5: !Not [ !Equals [ !Ref LBSSLCERT5, "" ] ]
+
+Resources:
+    TaskDummyTargetGroup:
+        Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+        Properties:
+            Port: 80
+            Protocol: HTTP
+            VpcId: !Ref VPCID
+
+    MicroserviceLoadBalancer:
+        Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+        Properties:
+            Name: !Join ["-", [ "microservice-alb", !Ref ALBNUMBER, !Ref SIGNIANTENV ] ]
+            Subnets: !Ref LOADBALANCERSUBNETS
+            SecurityGroups:
+                - !Ref LOADBALANCERSECURITYGROUP
+            Tags:
+                -
+                    Key: signiant-service
+                    Value: !Ref SIGNIANTSERVICE
+                -
+                    Key: signiant-product
+                    Value: !Ref SIGNIANTPRODUCT
+                -
+                    Key: signiant-environment
+                    Value: !Ref SIGNIANTENV
+                -
+                    Key: signiant-owner
+                    Value: !Ref SIGNIANTOWNER
+
+    ALBListener:
+        Type: "AWS::ElasticLoadBalancingV2::Listener"
+        Properties:
+            Protocol: HTTPS
+            Port: 443
+            Certificates:
+                -
+                    CertificateArn: !Ref LBSSLCERT1
+            LoadBalancerArn: !Ref MicroserviceLoadBalancer
+            DefaultActions:
+                -
+                    TargetGroupArn: !Ref TaskDummyTargetGroup
+                    Type: forward
+
+    ListenerCertificate2:
+      Condition: AddLBSSLCert2
+      Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+      Properties:
+        Certificates:
+          - CertificateArn: !Ref LBSSLCERT2
+        ListenerArn: !Ref ALBListener
+
+    ListenerCertificate3:
+      Condition: AddLBSSLCert3
+      Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+      Properties:
+        Certificates:
+          - CertificateArn: !Ref LBSSLCERT3
+        ListenerArn: !Ref ALBListener
+
+    ListenerCertificate4:
+      Condition: AddLBSSLCert4
+      Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+      Properties:
+        Certificates:
+          - CertificateArn: !Ref LBSSLCERT4
+        ListenerArn: !Ref ALBListener
+
+    ListenerCertificate5:
+      Condition: AddLBSSLCert5
+      Type: AWS::ElasticLoadBalancingV2::ListenerCertificate
+      Properties:
+        Certificates:
+          - CertificateArn: !Ref LBSSLCERT5
+        ListenerArn: !Ref ALBListener
+
+Outputs:
+    ALBARN:
+        Value: !Ref MicroserviceLoadBalancer
+        Export:
+          Name: !Join ["-", [ !Ref SIGNIANTENV, "microservice-alb", !Ref ALBNUMBER, "arn" ] ]
+    ALBLISTENERARN:
+        Value: !Ref ALBListener
+        Export:
+          Name: !Join ["-", [ !Ref SIGNIANTENV, "microservice-alb", !Ref ALBNUMBER, "listenerarn" ] ]
+    ALBZONEID:
+        Value: !GetAtt MicroserviceLoadBalancer.CanonicalHostedZoneID
+        Export:
+          Name: !Join ["-", [ !Ref SIGNIANTENV, "microservice-alb", !Ref ALBNUMBER, "zoneid" ] ]
+    ALBDNSNAME:
+        Value: !GetAtt MicroserviceLoadBalancer.DNSName
+        Export:
+          Name: !Join ["-", [ !Ref SIGNIANTENV, "microservice-alb", !Ref ALBNUMBER, "dnsname" ] ]
