@@ -1,0 +1,322 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Run service on ECS
+Parameters:
+    ALB:
+        Description: ALB to use for this service
+        Type: String
+        Default: "microservice-alb-1"
+    LISTENERRULEMAINPRIORITY:
+        Description: Priority to give the ALB listener rule for primary DNS
+        Type: String
+        Default: "COMPUTED_AT_PROMO_TIME"
+    LISTENERRULEREGIONALPRIORITY:
+        Description: Priority to give the ALB listener rule for regional DNS
+        Type: String
+        Default: "COMPUTED_AT_PROMO_TIME"
+    SIGNIANTSERVICE:
+        Description: Name for this service
+        Type: String
+        Default: ""
+    SIGNIANTENV:
+        Description: Deployment Environment
+        Type: String
+        Default: ""
+    SIGNIANTOWNER:
+        Description: Owner of this service
+        Type: String
+        Default: "DevOps"
+    SIGNIANTPRODUCT:
+        Description: Product name (MediaShuttle, Flight, etc)
+        Type: String
+        Default: "MediaShuttle"
+    AWSREGION:
+        Description: Application config parameter (Region name)
+        Type: String
+        Default: ""
+    CONFIGFILE:
+        Description: Full path of the config file to use from S3
+        Type: String
+        Default: ""
+    AWSS3REGION:
+        Description: S3 region
+        Type: String
+        Default: ""
+    HOSTPORT:
+        Description: Host port
+        Type: String
+        Default: ""
+    CLUSTERNAME:
+        Description: The name of the cluster to use
+        Type: String
+        Default: ""
+    IMAGENAME:
+        Description: The name of the dockerhub image. i.e. example/service:tag
+        Type: String
+        Default: ""
+    CONTAINERNAME:
+        Description: The name of the docker container
+        Type: String
+        Default: ""
+    DNSPREFIX:
+        Description: (Optional) [DNS Record] Prefix for the ELB DNS Record
+        Type: String
+        Default: ""
+    DNSREGIONPREFIX:
+        Description: (Optional) [DNS Record] Prefix for the ELB DNS Regional Record
+        Type: String
+        Default: ""
+    DNSZONE:
+        Description: (Optional) [DNS Record] Route53-hosted zone to use for the ELB's DNS record (<prefix>.<zone>)
+        Type: String
+        Default: ""
+    RECORDWEIGHT:
+        Description: "[DNS Record] Weight to use for the Route53 DNS weighted record"
+        Type: String
+        Default: "100"
+    TASKDESIREDCOUNT:
+        Description: "[Task] Desired number of running tasks"
+        Type: String
+        Default: ""
+    SERVICEROLE:
+        Description: "[Service] Name of the role"
+        Type: String
+    MANAGEDPOLICYNAME:
+        Description: "Name of the Managed Policy to attach to the Task Role"
+        Type: String
+        Default: Unauthorized
+    CONTAINERPORT:
+        Description: "[Service] The port on the container"
+        Type: String
+        Default: ""
+    REQUIREDCPU:
+        Description: "[TaskDef] The required CPU usage based on a 1-1024 scale"
+        Type: String
+        Default: "10"
+    REQUIREDMEMORY:
+        Description: "[TaskDef] The requried memory needed in MB"
+        Type: String
+        Default: "100"
+    VPCID:
+        Description: "[Load Balancer] VPC ID in which the load balancer exists"
+        Type: String
+        Default: ""
+    EventApiSubscriptionsQueueName:
+        Description: Name of the SQS queue for Event API subscription messages
+        Type: String
+        Default: ""
+    EventApiDeadSubscriptionsQueueName:
+        Description: Name of the SQS dead letter queue for failed Event API subscription messages
+        Type: String
+        Default: ""
+    AlarmCpuUtilization:
+        Description: Threshold for CPU
+        Type: String
+        Default: "80"
+    AlarmMemoryUtilization:
+        Description: Threshold for Memory
+        Type: String
+        Default: "80"
+    SNSSubscription:
+        Description: The SNS Topic to subscribe to
+        Type: String
+        Default: "Dev"
+        AllowedValues:
+            - General
+            - MediaShuttle
+            - Flight
+            - Dev
+
+Conditions:
+    CreateDnsEntry: !And
+        - !Not [ !Equals [ !Ref DNSPREFIX, "" ] ]
+        - !Not [ !Equals [ !Ref DNSZONE, "" ] ]
+    CreateRegionalDnsEntry: !And
+        - !Not [ !Equals [ !Ref DNSREGIONPREFIX, "" ] ]
+        - !Not [ !Equals [ !Ref DNSZONE, "" ] ]
+    SetDeploymentOptions:
+        !Not [ !Equals [ !Ref TASKDESIREDCOUNT, "1" ] ]
+
+Resources:
+    TaskRole:
+        Type: "AWS::IAM::Role"
+        Properties:
+            AssumeRolePolicyDocument:
+                Version: "2012-10-17"
+                Statement:
+                    -
+                        Effect: "Allow"
+                        Principal:
+                            Service: [ "ecs-tasks.amazonaws.com" ]
+                        Action: [ "sts:AssumeRole" ]
+            ManagedPolicyArns:
+                - !Join [ "", [ "arn:aws:iam::", !Ref "AWS::AccountId", ":policy/", !Ref MANAGEDPOLICYNAME] ]
+
+    Task:
+        Type: "AWS::ECS::TaskDefinition"
+        Properties:
+            TaskRoleArn: !Ref TaskRole
+            ContainerDefinitions:
+                -
+                    Cpu: !Ref REQUIREDCPU
+                    Environment:
+                        -
+                            Name: AWS_REGION
+                            Value: !Ref AWSREGION
+                        -
+                            Name: CONFIG_FILE
+                            Value: !Ref CONFIGFILE
+                        -
+                            Name: AWS_S3_REGION
+                            Value: !Ref AWSS3REGION
+                    Essential: "true"
+                    Image: !Ref IMAGENAME
+                    Memory: !Ref REQUIREDMEMORY
+                    Name: !Ref CONTAINERNAME
+                    LogConfiguration:
+                      LogDriver: json-file
+                      Options:
+                        max-size: 10m
+                        max-file: 2
+                    PortMappings:
+                        -
+                            ContainerPort:
+                                Ref: "CONTAINERPORT"
+                            HostPort:
+                                Ref: "HOSTPORT"
+                    DockerLabels:
+                        signiant-service: !Ref SIGNIANTSERVICE
+                        signiant-owner: !Ref SIGNIANTOWNER
+                        signiant-product: !Ref SIGNIANTPRODUCT
+                        signiant-environment: !Ref SIGNIANTENV
+
+    Service:
+        Type: "AWS::ECS::Service"
+        Properties:
+            Cluster:
+                Ref: "CLUSTERNAME"
+            DeploymentConfiguration:
+                !If
+                    - "SetDeploymentOptions"
+                    -
+                        MaximumPercent: 150
+                        MinimumHealthyPercent: 50
+                    -
+                        MaximumPercent: 200
+                        MinimumHealthyPercent: 100
+            DesiredCount:
+                Ref: "TASKDESIREDCOUNT"
+            TaskDefinition:
+                Ref: "Task"
+            LoadBalancers:
+                -
+                    ContainerPort:
+                        Ref: "CONTAINERPORT"
+                    ContainerName:
+                        Ref: "CONTAINERNAME"
+                    TargetGroupArn:
+                        Ref: "ServiceTargetGroup"
+            Role:
+                Ref: "SERVICEROLE"
+        DependsOn: [ "ListenerRuleMain" ]
+
+    ServiceTargetGroup:
+        Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+        Properties:
+            HealthCheckPath: "/healthcheck"
+            HealthCheckProtocol: HTTP
+            Port: 80
+            Protocol: HTTP
+            VpcId:
+                Ref: "VPCID"
+            TargetGroupAttributes:
+                -
+                    Key: "stickiness.enabled"
+                    Value: "false"
+            Tags:
+                -
+                    Key: signiant-service
+                    Value: !Ref SIGNIANTSERVICE
+                -
+                    Key: signiant-product
+                    Value: !Ref SIGNIANTPRODUCT
+                -
+                    Key: signiant-environment
+                    Value: !Ref SIGNIANTENV
+                -
+                    Key: signiant-owner
+                    Value: !Ref SIGNIANTOWNER
+
+    ListenerRuleMain:
+      Type: "AWS::ElasticLoadBalancingV2::ListenerRule"
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: ServiceTargetGroup
+        Conditions:
+          - Field: host-header
+            Values:
+              - !Join [ "", [ !Ref DNSPREFIX, ., !Ref DNSZONE] ]
+        ListenerArn:
+          Fn::ImportValue:
+            !Sub "${SIGNIANTENV}-${ALB}-listenerarn"
+        Priority: !Ref LISTENERRULEMAINPRIORITY
+
+    ListenerRuleRegional:
+      Condition: "CreateRegionalDnsEntry"
+      Type: "AWS::ElasticLoadBalancingV2::ListenerRule"
+      Properties:
+        Actions:
+        - Type: forward
+          TargetGroupArn:
+            Ref: ServiceTargetGroup
+        Conditions:
+          - Field: host-header
+            Values:
+              - !Join [ "", [ !Ref DNSREGIONPREFIX, ., !Ref DNSZONE] ]
+        ListenerArn:
+          Fn::ImportValue:
+            !Sub "${SIGNIANTENV}-${ALB}-listenerarn"
+        Priority: !Ref LISTENERRULEREGIONALPRIORITY
+
+    DNSSingleRecord:
+        Condition: "CreateRegionalDnsEntry"
+        Type: "AWS::Route53::RecordSet"
+        Properties:
+            AliasTarget:
+                HostedZoneId:
+                  Fn::ImportValue:
+                    !Sub "${SIGNIANTENV}-${ALB}-zoneid"
+                DNSName:
+                  Fn::ImportValue:
+                    !Sub "${SIGNIANTENV}-${ALB}-dnsname"
+            HostedZoneName: !Join [ "", [ !Ref DNSZONE, .] ]
+            Name: !Join [ "", [ !Ref DNSREGIONPREFIX, ., !Ref DNSZONE, .] ]
+            Type: A
+
+    DNSRecord:
+        Condition: "CreateDnsEntry"
+        Type: "AWS::Route53::RecordSetGroup"
+        Properties:
+            HostedZoneName: !Join [ "", [ !Ref DNSZONE, .] ]
+            RecordSets:
+                -
+                    AliasTarget:
+                      HostedZoneId:
+                        Fn::ImportValue:
+                          !Sub "${SIGNIANTENV}-${ALB}-zoneid"
+                      DNSName:
+                        Fn::ImportValue:
+                          !Sub "${SIGNIANTENV}-${ALB}-dnsname"
+                    Name: !Join [ "", [ !Ref DNSPREFIX, ., !Ref DNSZONE, .] ]
+                    Type: A
+                    SetIdentifier: !If [ CreateRegionalDnsEntry, !Ref DNSREGIONPREFIX, SingleWeightedRecord ]
+                    Weight: !Ref RECORDWEIGHT
+
+Outputs:
+    MyServiceName:
+        Description: The name of the created Service
+        Value: !Ref "Service"
+    ServiceTagValue:
+        Description: The signiant-service tag value for this service
+        Value: !Ref SIGNIANTSERVICE
